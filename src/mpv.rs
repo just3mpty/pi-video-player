@@ -16,6 +16,8 @@ use serde_json::{Value, json};
 use crate::{Event, Input};
 
 const INPUT_CONF: &str = include_str!("input.conf");
+/// Le noir de la palette (#0F0F0F), au format de mpv.
+const BACKGROUND: &str = "#0F0F0F";
 
 pub struct Mpv {
     process: Child,
@@ -62,7 +64,12 @@ impl Mpv {
         let reader = socket.try_clone()?;
         thread::spawn(move || read_events(reader, events));
 
-        Ok(Mpv { process, socket })
+        let mut mpv = Mpv { process, socket };
+        // Fond des écrans sans vidéo (Clock, Weather). Envoyé par IPC plutôt qu'en option de
+        // lancement : si la version de mpv ne connaît pas la propriété, on a juste un message
+        // d'erreur au lieu d'un mpv qui refuse de démarrer.
+        mpv.command(json!(["set_property", "background-color", BACKGROUND]))?;
+        Ok(mpv)
     }
 
     /// Joue les fichiers en boucle, à la place de ce qui passait.
