@@ -1,13 +1,14 @@
 mod menu;
 mod mpv;
 mod overlay;
+mod gpio;
 
 use std::env;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use chrono::{Local, Timelike};
 
@@ -76,13 +77,16 @@ impl App {
         self.active = Some(category);
         self.notice = None;
 
-        let Some(folder) = category.video_folder() else {
+        let Some(names) = category.videos() else {
             return self.mpv.stop(); // Clock et Weather s'affichent sur fond noir
         };
-        let dir = self.videos_dir.join(folder);
-        let files = list_videos(&dir);
+        let paths: Vec<PathBuf> = names.iter().map(|name| self.videos_dir.join(name)).collect();
+        let (files, missing): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| p.is_file());
+        for path in &missing {
+            eprintln!("Vidéo introuvable : {}", path.display());
+        }
         if files.is_empty() {
-            self.notice = Some((category.label().to_string(), format!("Aucune vidéo dans {}", dir.display())));
+            self.notice = Some((category.label().to_string(), format!("Vidéo introuvable dans {}", self.videos_dir.display())));
             return self.mpv.stop();
         }
         self.mpv.play(&files)
@@ -103,10 +107,11 @@ impl App {
             self.mpv.remove_overlay(MENU_OVERLAY)?;
         }
 
+        let open = self.menu.open;
         let screen = match (self.active, &self.notice) {
-            (_, Some((title, detail))) => Some(overlay::message(title, detail)),
-            (Some(Category::Clock), _) => Some(overlay::clock(Local::now())),
-            (Some(Category::Weather), _) => Some(overlay::message("Weather", "Bientôt disponible")),
+            (_, Some((title, detail))) => Some(overlay::message(title, detail, open)),
+            (Some(Category::Clock), _) => Some(overlay::clock(Local::now(), open)),
+            (Some(Category::Weather), _) => Some(overlay::message("Weather", "Bientôt disponible", open)),
             _ => None,
         };
         match screen {
@@ -116,15 +121,19 @@ impl App {
     }
 }
 
-/// Fichiers vidéo du dossier, triés par nom (vide si le dossier n'existe pas).
-fn list_videos(dir: &Path) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else { return Vec::new() };
-    let mut files: Vec<PathBuf> = entries
+/// Une vidéo au hasard dans le dossier, pour l'ambiance au démarrage.
+/// Pas besoin d'une crate de hasard pour un seul tirage : les nanosecondes de l'heure suffisent.
+fn random_video(dir: &Path) -> Option<PathBuf> {
+    let entries = fs::read_dir(dir).ok()?;
+    let videos: Vec<PathBuf> = entries
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .filter(|path| path.is_file() && is_video(path))
         .collect();
-    files.sort();
-    files
+    if videos.is_empty() {
+        return None;
+    }
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.subsec_nanos() as usize;
+    Some(videos[nanos % videos.len()].clone())
 }
 
 fn is_video(path: &Path) -> bool {
@@ -140,12 +149,30 @@ fn until_next_second() -> Duration {
 }
 
 fn main() -> io::Result<()> {
-    let videos_dir = PathBuf::from(env::args().nth(1).unwrap_or_else(|| "videos".to_string()));
+    // Par défaut ~/media, le même chemin sur le PC de dev et sur le Pi.
+    let videos_dir = match env::args().nth(1) {
+        Some(dir) => PathBuf::from(dir),
+        None => PathBuf::from(env::var("HOME").unwrap_or_default()).join("media"),
+    };
     println!("Dossier des vidéos : {}", videos_dir.display());
 
     let (events, inbox) = mpsc::channel();
+
+    {
+    let events = events.clone();
+    std::thread::spawn(move || {
+        if let Err(e) = gpio::listen(events) {
+            eprintln!("Erreur GPIO : {e}");
+        }
+    });
+}
+
     let mpv = Mpv::launch(events)?;
     let mut app = App { mpv, videos_dir, menu: Menu::new(), active: None, notice: None };
+    match random_video(&app.videos_dir) {
+        Some(video) => app.mpv.play(&[video])?,
+        None => eprintln!("Aucune vidéo dans {}, démarrage sur fond noir.", app.videos_dir.display()),
+    }
     app.render()?;
 
     loop {

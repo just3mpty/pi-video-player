@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+gpiocdev = "0.8.0"
 serde_json = "1.0.151"

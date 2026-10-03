@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-const ALWAYS_VISIBLE: bool = true;
-
 const MENU_TIMEOUT: Duration = Duration::from_secs(8);
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,10 +22,12 @@ impl Category {
         }
     }
 
-    pub fn video_folder(self) -> Option<&'static str> {
+    /// Vidéos jouées en boucle pour cette catégorie, relatives au dossier des vidéos.
+    /// `None` = catégorie sans vidéo (affichage sur fond noir).
+    pub fn videos(self) -> Option<&'static [&'static str]> {
         match self {
-            Category::Cyberpunk => Some("cyberpunk"),
-            Category::Lofi => Some("lofi"),
+            Category::Cyberpunk => Some(&["test.mp4"]),
+            Category::Lofi => Some(&["une nuit au clair de lune (24fps).mp4"]),
             Category::Weather | Category::Clock => None,
         }
     }
@@ -58,9 +58,7 @@ impl Menu {
     }
 
     pub fn hide(&mut self) {
-        if !ALWAYS_VISIBLE {
-            self.open = false;
-        }
+        self.open = false;
     }
 
     pub fn move_by(&mut self, delta: isize) {
